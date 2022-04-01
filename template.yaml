@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Serverless SAM template
+
+Parameters:
+  ModuleName:
+    Type: String
+    Default: none
+  EnvName:
+    Type: String
+    Default: none
+  Region:
+    Type: String
+    Default: none
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 1024
+    Runtime: nodejs14.x
+    Handler: app.handler
+    Environment:
+      Variables:
+        VALIDATED_CSV: validated-csv-zzz-xxx-yyy.csv
+        REGION: !Ref Region
+  Api:
+    Cors:
+      AllowMethods: "'POST,OPTIONS,GET,PUT,DELETE'"
+      AllowHeaders: "'*'"
+      AllowOrigin: "'*'"
+
+Resources:
+  ServiceApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "${ModuleName}-${EnvName}-api"
+      Description: !Sub "${ModuleName} ${EnvName} API Gateway"
+      EndpointConfiguration:
+        Type: REGIONAL
+      DisableExecuteApiEndpoint: true
+      StageName: !Ref EnvName
+      Auth:
+        Authorizers:
+          JwtAuthorizer:
+            FunctionPayloadType: TOKEN
+            FunctionArn: !Sub "{{resolve:ssm:${EnvName}-CustomJWTAuthorizerArn}}"
+            Identity:
+              Header: Authorization
+              ValidationExpression: Bearer.*
+              ReauthorizeEvery: 0
+        DefaultAuthorizer: JwtAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+  ServiceApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    DependsOn: "ServiceApiStage"
+    Properties:
+      ApiId: !Ref ServiceApi
+      ApiMappingKey: service
+      DomainName: !Sub "{{resolve:ssm:${EnvName}-ApiGatewayCustomDomain}}"
+      Stage: !Ref EnvName
+  serviceLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: serviceLayer
+      Description: service-description
+      ContentUri: dependencies/
+      CompatibleRuntimes:
+        - nodejs14.x
+      RetentionPolicy: Delete
+  getUsers:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ModuleName}-getUsers-${EnvName}"
+      CodeUri: scripts/users
+      Handler: users/getUsers.handler
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/lambda_role"
+      Layers:
+        - !Ref serviceLayer
+      Events:
+        getUsers:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ServiceApi
+            Path: /users
+            Method: get
